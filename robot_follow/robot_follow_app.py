@@ -25,6 +25,7 @@ import asyncio
 import logging
 import math
 import signal
+import sys
 import threading
 import time
 from robot_follow.follow_api import ControllerConfig, SharedDetectionState
@@ -316,7 +317,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main():
     # So `--help | head` exits cleanly instead of leaking BrokenPipeError.
-    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    # Only for --help: at runtime SIG_DFL makes any write to a closed socket
+    # (e.g. a browser refreshing the web UI mid-MJPEG) kill the process.
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
     shared_state = SharedDetectionState()
     shutdown = asyncio.Event()
