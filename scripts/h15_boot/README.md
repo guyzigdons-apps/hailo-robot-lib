@@ -252,6 +252,18 @@ tail -f /var/log/drone-follow.log
 tail -200 /var/log/drone-follow.log
 ```
 
+### FC command log
+
+Every command sent to the flight controller (and, with `--dry-run`, every command that
+would be sent) is written to `/home/root/fc_command_logs/fc_commands_<timestamp>.jsonl`.
+This directory survives reboots, unlike `/var/log`. Use `--cmd-log <dir|file.jsonl>` to change
+the location, or `--cmd-log off` to disable it.
+
+```bash
+ls -t /home/root/fc_command_logs | head -3
+tail -f /home/root/fc_command_logs/$(ls -t /home/root/fc_command_logs | head -1)
+```
+
 ## Quick health check on target
 
 ```bash

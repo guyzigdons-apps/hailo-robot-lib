@@ -44,6 +44,7 @@ from robot_follow.robot_api.adapters.mavsdk_drone import (
     _reap_mavsdk_server,
     add_drone_args,
 )
+from robot_follow.robot_api import command_log
 from robot_follow.robot_api.orchestrator import run_robot_loop
 from robot_follow.servers import FollowServer
 from robot_follow.servers.web_server import SharedUIState, WebServer, _WebHandler
@@ -72,13 +73,16 @@ class _DryRunDroneAdapter:
             return
         LOGGER.info("[dry-run] cmd forward=%.2f m/s yaw=%.2f deg/s down=%.2f m/s",
                     cmd.forward_m_s, cmd.yaw_rate, cmd.down_m_s)
+        command_log.log_velocity(cmd.forward_m_s, 0.0, cmd.down_m_s, cmd.yaw_rate)
 
     async def send_zero(self) -> None:
         LOGGER.info("[dry-run] send_zero (quiescent)")
+        command_log.log_zero()
 
     async def on_target_lost(self, last_detection) -> None:
         # Old behavior was yaw-spin to search; dry-run just notes the state.
         LOGGER.info("[dry-run] target lost — would search")
+        command_log.log_search(None)
 
     async def shutdown(self) -> None:
         LOGGER.info("[dry-run] shutdown")
@@ -491,6 +495,10 @@ def main():
         else:
             adapter = MavsdkDroneAdapter(args, controller_config)
             LOGGER.info("[drone] Thread started, connection=%s", args.connection)
+        dry_run = bool(getattr(args, "dry_run", False))
+        command_log.open_from_args(
+            args, dry_run=dry_run,
+            connection=None if dry_run else getattr(args, "connection", None))
 
         async def _main():
             duration = getattr(args, "mission_duration", math.inf)
@@ -523,6 +531,7 @@ def main():
                            exc_info=True)
         finally:
             LOGGER.info("[robot] Thread exiting")
+            command_log.close()
             loop.close()
 
     drone_thread = threading.Thread(target=run_robot, daemon=True)

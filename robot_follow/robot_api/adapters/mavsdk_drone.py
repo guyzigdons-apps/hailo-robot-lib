@@ -31,6 +31,7 @@ from robot_follow.follow_api.types import (
     SafetyContext,
 )
 from robot_follow.follow_api.config import ControllerConfig
+from robot_follow.robot_api import command_log
 
 LOGGER = logging.getLogger(__name__)
 
@@ -293,6 +294,7 @@ def add_drone_args(parser) -> None:
                             "Without --takeoff-landing: triggers a control-loop restart "
                             "(the app keeps running; the loop reconnects). "
                             "Set to a large value (e.g. 86400) for unbounded missions.")
+    command_log.add_command_log_args(group)
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +676,7 @@ class MavsdkDroneAdapter:
                     return
                 try:
                     await self._drone.action.arm()
+                    command_log.log_action("arm")
                     break
                 except mavsdk.action.ActionError as e:
                     if attempt == _ARM_MAX_ATTEMPTS - 1:
@@ -687,6 +690,7 @@ class MavsdkDroneAdapter:
                             return
                         await asyncio.sleep(_ARM_SHUTDOWN_POLL_S)
             await self._drone.action.takeoff()
+            command_log.log_action("takeoff", altitude_m=self._args.target_altitude)
             await asyncio.sleep(5)
         # OFFBOARD handshake. --auto-offboard tells the app to set the
         # mode itself (SITL / bench). Without it, stream zero setpoints
@@ -695,10 +699,12 @@ class MavsdkDroneAdapter:
         # pilot leaves OFFBOARD mid-flight.
         if getattr(self._args, "auto_offboard", False):
             await _start_offboard(self._drone, self._shutdown_event)
+            command_log.log_action("offboard_start")
         else:
             await _wait_for_offboard_mode(self._drone, self._shutdown_event)
             if self._shutdown_event.is_set():
                 return
+            command_log.log_mode(offboard=True)
             self._offboard_monitor_task = asyncio.create_task(
                 self._offboard_resilience_loop())
 
@@ -729,6 +735,7 @@ class MavsdkDroneAdapter:
                 return
             # OFFBOARD lost; stop driving the wire until pilot flips back.
             self._offboard_active = False
+            command_log.log_mode(offboard=False)
             await _wait_for_offboard_mode(self._drone, self._shutdown_event)
             if self._shutdown_event.is_set():
                 return
@@ -736,6 +743,7 @@ class MavsdkDroneAdapter:
             # into the new control session.
             self._smoothing = SmoothingState()
             self._offboard_active = True
+            command_log.log_mode(offboard=True)
 
     async def send_command(
         self,
@@ -770,6 +778,8 @@ class MavsdkDroneAdapter:
             smoothed.yaw_rate,  # already deg/s per DRONE_CAPS.yaw_unit (Q5 lock)
         )
         await self._drone.offboard.set_velocity_body(vbys)
+        command_log.log_velocity(vbys.forward_m_s, vbys.right_m_s, vbys.down_m_s,
+                                 vbys.yawspeed_deg_s, cmd=cmd)
 
     async def send_zero(self) -> None:
         """Quiescent zero setpoint + reset smoothing state.
@@ -782,6 +792,7 @@ class MavsdkDroneAdapter:
         await self._drone.offboard.set_velocity_body(
             VelocityBodyYawspeed(0.0, 0.0, 0.0, 0.0)
         )
+        command_log.log_zero()
 
     async def on_target_lost(self, last_detection: Optional[Detection]) -> None:
         """Drone's lost-target behavior: yaw-spin in last bbox direction."""
@@ -793,6 +804,7 @@ class MavsdkDroneAdapter:
         await self._drone.offboard.set_velocity_body(
             VelocityBodyYawspeed(0.0, 0.0, 0.0, yawspeed_deg_s)
         )
+        command_log.log_search(yawspeed_deg_s)
 
     async def shutdown(self) -> None:
         """Idempotent. Cancel telemetry, land if armed, exit context."""
@@ -808,6 +820,7 @@ class MavsdkDroneAdapter:
             getattr(self._args, "takeoff_landing", False)
             and self._drone is not None
         ):
+            command_log.log_action("land")
             try:
                 await _land_safely(self._drone)
             except Exception:
